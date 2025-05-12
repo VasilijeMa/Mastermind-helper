@@ -73,14 +73,17 @@ fn write_hits(right: usize, wrong: usize) {
     println!("Hits: {hits}");
 }
 
-fn max_possible_outcomes(remaining_combinations: &Vec<String>, guess: &str) -> usize {
+fn max_possible_outcomes(remaining_combinations: &Vec<String>, guess: &str, min: usize) -> usize {
     let mut max = 0;
     let responses = all_responses();
     for (right, wrong) in &responses {
-        let num_outcumes = remaining_combinations.iter()
+        let num_outcomes = remaining_combinations.iter()
         .filter(|&x| determine_hits(x, guess) == (*right as usize, *wrong as usize)).count();
-        if num_outcumes > max {
-            max = num_outcumes;
+        if num_outcomes > max {
+            if num_outcomes > min {
+                return num_outcomes;
+            }
+            max = num_outcomes;
         }
     }
     max
@@ -95,7 +98,7 @@ fn next_guess(remaining_combinations: &Vec<String>, all_combinations: &Vec<Strin
     let mut best_guess = String::from("");
 
     for guess in all_combinations {
-        let max = max_possible_outcomes(&remaining_combinations, guess);
+        let max = max_possible_outcomes(&remaining_combinations, guess, min);
         if max < min {
             min = max;
             best_guess.clear();
@@ -123,9 +126,11 @@ fn main() {
         println!("Guess:       {guess}");
         let (right, wrong) = determine_hits(&combination, &guess);
         write_hits(right, wrong);
+
         remaining_combinations.retain(|x| determine_hits(x, &guess) == (right, wrong) && right != 4);
         let l = remaining_combinations.len();
         println!("Remaining possibilities: {l}");
+        
         guess.clear();
         guess.push_str(&next_guess(&remaining_combinations, &all_combinations));
     }
