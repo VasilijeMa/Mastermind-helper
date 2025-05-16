@@ -1,14 +1,20 @@
 use std::io;
 
 use rand::Rng;
+use once_cell::sync::Lazy;
+use itertools::Itertools;
+
+static SYMBOLS: [char; 6] = ['☻', '♣', '♠', '♥', '♦', '♪'];
+static ALL_COMBINATIONS: Lazy<Vec<String>> = Lazy::new(|| {
+    all_combinations()
+});
 
 fn all_combinations() -> Vec<String> {
-    let symbols = ['☻', '♣', '♠', '♥', '♦', '♪'];
     let mut combinations = Vec::new();
-    for &a in &symbols {
-        for &b in &symbols {
-            for &c in &symbols {
-                for &d in &symbols {
+    for &a in &SYMBOLS {
+        for &b in &SYMBOLS {
+            for &c in &SYMBOLS {
+                for &d in &SYMBOLS {
                     combinations.push(format!("{}{}{}{}", a, b, c, d));
                 }
             }
@@ -81,30 +87,31 @@ fn max_possible_outcomes(remaining_combinations: &Vec<String>, guess: &str, min:
     max
 }
 
-fn next_guess(remaining_combinations: &Vec<String>, all_combinations: &Vec<String>) -> String {
-    if remaining_combinations.len() < 3 {
-        return remaining_combinations[0].to_string();
+fn next_best_guesses(remaining_combinations: &Vec<String>) -> Vec<String> {
+    let mut best_guesses:Vec<String> = Vec::new();
+    if remaining_combinations.len() == 1 {
+        return vec![remaining_combinations[0].to_string()];
     }
 
     let mut min = remaining_combinations.len();
-    let mut best_guess = String::from("");
 
-    for guess in all_combinations {
-        let max = max_possible_outcomes(&remaining_combinations, guess, min);
+    for guess in ALL_COMBINATIONS.iter() {
+        let max = max_possible_outcomes(&remaining_combinations, &guess, min);
         if max < min {
             min = max;
-            best_guess.clear();
-            best_guess.push_str(guess);
+            best_guesses.clear();
+            best_guesses.push(String::from(guess));
+        } else if max == min {
+            best_guesses.push(String::from(guess));
         }
     }
     
-    best_guess
+    best_guesses
 }
 
 fn random_combination() -> String {
-    let symbols = ['☻', '♣', '♠', '♥', '♦', '♪'];
     (0..4)
-    .map(|_| symbols[rand::thread_rng().gen_range(0..symbols.len())])
+    .map(|_| SYMBOLS[rand::thread_rng().gen_range(0..SYMBOLS.len())])
     .collect()
 }
 
@@ -114,14 +121,13 @@ fn await_key() {
     io::stdin().read_line(&mut wait).expect("");
 }
 
-fn run_algorithm() {
+fn show_algorithm() {
     print!("\x1B[2J\x1B[1;1H");
     let combination = random_combination();
 
     println!("Combination: {combination}\n");
     
     let mut remaining_combinations = all_combinations();
-    let all_combinations = all_combinations();
     
     let mut guess: String = String::from("☻☻♣♣");
 
@@ -132,22 +138,21 @@ fn run_algorithm() {
         if right == 4 {
             break;
         }
-
+        
         remaining_combinations.retain(|x| determine_hits(x, &guess) == (right, wrong));
 
         let l = remaining_combinations.len();
         println!("Remaining possibilities: {l}");
         
         guess.clear();
-        guess.push_str(&next_guess(&remaining_combinations, &all_combinations));
+        guess.push_str(&next_best_guesses(&remaining_combinations)[0]);
     }
     println!("Combination found!");
     await_key();
 }
 
 fn display_chosen_symbol(chosen_symbol: usize) -> String {
-    let symbols = ['☻', '♣', '♠', '♥', '♦', '♪'];
-    symbols.iter().enumerate()
+    SYMBOLS.iter().enumerate()
     .map(|(i, &x)| if i == chosen_symbol {
         format!("[{}]", x)
     } else {
@@ -155,19 +160,42 @@ fn display_chosen_symbol(chosen_symbol: usize) -> String {
     }).collect()
 }
 
-fn play_game() {
-    let symbols = ['☻', '♣', '♠', '♥', '♦', '♪'];
+fn read_option() -> String {
+    let mut option = String::new();
+    io::stdin().read_line(&mut option).expect("");
+    let option = option.trim().to_uppercase();
+
+    option
+}
+
+fn are_similar(user_guess: &str, guess: &str) -> bool {
+    let (right, wrong) = determine_hits(user_guess, guess);
+    right > 2 || wrong > 2 || right + wrong == 4
+}
+
+fn play_game(with_helper: bool) {
     print!("\x1B[2J\x1B[1;1H");
     let combination = random_combination();
 
     println!("You have 6 attempts to guess the combination.\n");
     let mut attempt: u8 = 0;
-    let mut guesses = Vec::new();
+    let mut guesses: Vec<(String, usize, usize)> = Vec::new();
     let mut game_won = false;
+    let mut remaining_combinations = Vec::new();
+    if with_helper {
+        remaining_combinations = all_combinations();
+    }
+    let mut attempt_over = false;
+    let mut review_move = false;
+    let mut guess = String::new();
+    let mut processed_guesses: usize = 0;
+    let mut review_display: u8 = 3;
+    let mut best_guesses: Vec<String> = Vec::new();
+    let mut last_guess = String::new();
 
     'game_loop: loop {
         attempt+=1;
-        let mut guess = String::new();
+        guess.clear();
         let mut chosen_symbol = 0;
         loop {
             print!("\x1B[2J\x1B[1;1H");
@@ -184,29 +212,96 @@ fn play_game() {
                 break 'game_loop;
             }
 
-            println!("Guess {attempt}/6");
-            println!("{guess}");
+            if (!with_helper || !attempt_over) && !review_move {
+                println!("Guess {attempt}/6");
+                println!("{guess}");
+    
+                let display_symbols = display_chosen_symbol(chosen_symbol);
+                println!("{display_symbols}");
+                println!("Choose symbol using A and D. Select by pressing enter. Press X to undo.");
+                
+                let option = read_option();
+    
+                match option.as_str() {
+                    "A" => chosen_symbol = chosen_symbol.saturating_sub(1),
+                    "D" => chosen_symbol = (chosen_symbol + 1).min(5),
+                    "X" => {
+                        guess.pop();
+                    },
+                    "" => guess.push(SYMBOLS[chosen_symbol]),
+                    "Q" => return,
+                    _ => continue,
+                }
+            } else if attempt_over {
+                println!("If you wish to review your move, press R. Otherwise, press enter.");
+                
+                let option = read_option();
+    
+                match option.as_str() {
+                    "R" => review_move = true,
+                    "" =>  (),
+                    "Q" => return,
+                    _ => continue
+                }
+            } else {
+                if review_display == 3 {
+                    println!("{} guesses", guesses.len());
+                    guesses.iter()
+                    .skip(processed_guesses)
+                    .take(guesses.len() - processed_guesses - 1)
+                    .for_each(|(g, r, w)|{
+                        println!("GUESS");
+                        remaining_combinations.retain(|x| determine_hits(x, g) == (*r, *w));
+                    });
+                    processed_guesses += guesses.len() - processed_guesses - 1;
 
-            let display_symbols = display_chosen_symbol(chosen_symbol);
-            println!("{display_symbols}");
-            println!("Choose symbol using A and D. Select by pressing enter. Press X to undo.");
-            
-            let mut option = String::new();
-            io::stdin().read_line(&mut option).expect("");
-            let option = option.trim().to_uppercase();
-
-            match option.as_str() {
-                "A" => chosen_symbol = chosen_symbol.saturating_sub(1),
-                "D" => chosen_symbol = (chosen_symbol + 1).min(5),
-                "X" => {
-                    guess.pop();
-                },
-                "" => {
-                    guess.push(symbols[chosen_symbol]);
-                },
-                _ => (),
+                    best_guesses.clear();
+                    best_guesses.extend(next_best_guesses(&remaining_combinations));
+                    last_guess.clear();
+                    last_guess.push_str(&guesses.last().unwrap().0);
+                    review_display = 0;
+                }
+                
+                match review_display {
+                    0 => {
+                        if best_guesses.contains(&last_guess) {
+                            println!("Your move was optimal!")
+                        } else {
+                            println!("Your move was not optimal.");
+                        };
+                        println!("To view all optimal moves, press 1.");
+                        println!("To view optimal moves most similar to yours, press 2.");
+                        println!("To return to the game, press enter.");
+        
+                        let option = read_option();
+        
+                        if option.is_empty() {
+                            review_move = false;
+                            review_display = 3;
+                        } else if let Ok(num @ 1..=2) = option.parse::<u8>() {
+                            review_display = num;
+                        } else {
+                            continue;
+                        }
+                    },
+                    1 => {
+                        println!("All optimal moves:");
+                        println!("{}", best_guesses.join(" "));
+                        review_display = 0;
+                        await_key();
+                    },
+                    2 => {
+                        println!("Similar optimal moves:");
+                        println!("{}", best_guesses.iter().filter(|x| are_similar(&last_guess, x)).join(" "));
+                        review_display = 0;
+                        await_key();
+                    },
+                    _ => continue
+                }
+                
             }
 
+            attempt_over = false;
             if guess.chars().count() == 4 {
                 break;
             }
@@ -214,6 +309,7 @@ fn play_game() {
         let (right, wrong) = determine_hits(&combination, &guess);
         write_hits(right, wrong);
         guesses.push((guess.clone(), right, wrong));
+        attempt_over = true;
 
         if right == 4 {
             game_won = true;
@@ -221,7 +317,8 @@ fn play_game() {
     }
     
     if game_won {
-        println!("Combination found!");
+        attempt -= 1;
+        println!("Combination found in {attempt} attempts!");
     } else {
         println!("Out of attempts! The combination was {combination}.");
         println!("Better luck next time!");
@@ -237,17 +334,23 @@ fn main() {
         println!("1 - Play game");
         println!("2 - Play game with step-by-step aid");
         println!("3 - Run the algorithm for a random combination");
-        println!("Q - Quit");
+        println!("Q - Quit (use at any time)");
     
-        let mut option = String::new();
-        io::stdin().read_line(&mut option).expect("");
-        let option = option.trim().to_uppercase();
+        let option = read_option();
 
         match option.as_str() {
-            "1" => play_game(),
-            "3" => run_algorithm(),
+            "1" => play_game(false),
+            "2" => play_game(true),
+            "3" => show_algorithm(),
             "Q" => break,
             _ => continue,
         }
     }
 }
+
+// (processed_guesses..guesses.len()-1).for_each(|i| {
+                //     let past_guess = &guesses[i].0;
+                //     let right = guesses[i].1;
+                //     let wrong = guesses[i].2;
+                    
+                // });
