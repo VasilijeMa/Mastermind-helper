@@ -1,66 +1,72 @@
 use std::io;
 
-use rand::Rng;
-use once_cell::sync::Lazy;
 use itertools::Itertools;
 
-static SYMBOLS: [char; 6] = ['☻', '♣', '♠', '♥', '♦', '♪'];
-static ALL_COMBINATIONS: Lazy<Vec<String>> = Lazy::new(|| {
-    all_combinations()
-});
+mod algorithm;
+use algorithm::*;
 
-fn all_combinations() -> Vec<String> {
-    let mut combinations = Vec::new();
-    for &a in &SYMBOLS {
-        for &b in &SYMBOLS {
-            for &c in &SYMBOLS {
-                for &d in &SYMBOLS {
-                    combinations.push(format!("{}{}{}{}", a, b, c, d));
-                }
-            }
-        }
-    }
-    combinations
+struct GameState {
+    remaining_combinations: Vec::<String>,
+    current_guess: String,
+    game_mode: GameMode,
+    combination: String,
+    attempt: u8,
+    past_guesses: Vec<(String, usize, usize)>,
+    game_won: bool,
+    num_processed_guesses: usize,
+    best_guesses: Vec<String>,
+    was_victory_possible: bool,
+    chosen_symbol: usize,
+    display: Display
 }
 
-fn all_responses() -> Vec<(u8, u8)> {
-    let mut responses = Vec::new();
-    for j in 0..=4 {
-        let i = 4 - j;
-        for k in (0..=i).rev() {
-            if (j, k) == (3, 1) {
-                continue;
-            }
-            responses.push((j, k));
-        }
-    }
-    responses
+enum Display {
+    KeepGuessing,
+    OfferReview,
+    ShowReviewOptions,
+    ShowReview(u8)
 }
 
-fn determine_hits(combination: &str, guess: &str) -> (usize, usize) {
-    let comb_chars: Vec<char> = combination.chars().collect();
-    let guess_chars: Vec<char> = guess.chars().collect();
+enum GameMode {
+    Normal,
+    WithHelper,
+    Simulated
+}
 
-    let mut right = [false; 4];
-    let mut wrong = [false; 4];
-
-    for i in 0..4 {
-        right[i] = comb_chars[i] == guess_chars[i];
+impl GameState {
+    fn new(game_mode: GameMode) -> Self {
+        Self {
+            remaining_combinations: if let GameMode::Normal = game_mode { Vec::new() } else { all_combinations() },
+            current_guess: if let GameMode::Simulated = game_mode { String::from("☻☻♣♣") } else { String::new() },
+            game_mode,
+            combination: random_combination(),
+            attempt: 1,
+            past_guesses: Vec::new(),
+            game_won: false,
+            num_processed_guesses: 0,
+            best_guesses: Vec::new(),
+            was_victory_possible: true,
+            chosen_symbol: 0,
+            display: Display::KeepGuessing
+        }
     }
 
-    for (i, &c) in guess_chars.iter().enumerate() {
-        if right[i] {
-            continue;
-        }
-        if let Some(j) = comb_chars.iter().enumerate()
-            .find(|(j, &x)| x == c && !right[*j] && !wrong[*j])
-            .map(|(j, _)| j)
-        {
-            wrong[j] = true;
-        }
+    fn is_finished(&self) -> bool {
+        self.game_won || self.attempt > 6
     }
 
-    (right.iter().filter(|&&x| x).count(), wrong.iter().filter(|&&x| x).count())
+    fn save_current_guess(&mut self) {
+        let (right, wrong) = determine_hits(&self.combination, &self.current_guess);
+        write_hits(right, wrong);
+        self.past_guesses.push((self.current_guess.clone(), right, wrong));
+
+        if right == 4 {
+            self.game_won = true;
+        }
+        self.attempt+=1;
+        self.current_guess.clear();
+        self.chosen_symbol = 0;
+    }
 }
 
 fn write_hits(right: usize, wrong: usize) {
@@ -69,98 +75,6 @@ fn write_hits(right: usize, wrong: usize) {
         _ => "•".repeat(right) + &"○".repeat(wrong),
     };
     println!("{hits}");
-}
-
-fn max_possible_outcomes(remaining_combinations: &Vec<String>, guess: &str, min: usize) -> usize {
-    let mut max = 0;
-    let responses = all_responses();
-    for (right, wrong) in &responses {
-        let num_outcomes = remaining_combinations.iter()
-        .filter(|&x| determine_hits(x, guess) == (*right as usize, *wrong as usize)).count();
-        if num_outcomes > max {
-            if num_outcomes > min {
-                return num_outcomes;
-            }
-            max = num_outcomes;
-        }
-    }
-    max
-}
-
-fn next_best_guesses(remaining_combinations: &Vec<String>) -> (Vec<String>, bool) {
-    let mut best_guesses:Vec<String> = Vec::new();
-    if remaining_combinations.len() == 1 {
-        return (vec![remaining_combinations[0].to_string()], true);
-    }
-
-    let mut min = remaining_combinations.len();
-
-    for guess in ALL_COMBINATIONS.iter() {
-        let max = max_possible_outcomes(&remaining_combinations, &guess, min);
-        if max < min {
-            min = max;
-            best_guesses.clear();
-            best_guesses.push(String::from(guess));
-        } else if max == min {
-            best_guesses.push(String::from(guess));
-        }
-    }
-
-    if let Some(_) = best_guesses.iter().find(|&x| remaining_combinations.contains(x)) {
-        best_guesses.retain(|x| remaining_combinations.contains(x));
-        return (best_guesses, true);
-    }
-    
-    (best_guesses, false)
-}
-
-fn random_combination() -> String {
-    (0..4)
-    .map(|_| SYMBOLS[rand::thread_rng().gen_range(0..SYMBOLS.len())])
-    .collect()
-}
-
-fn await_key() {
-    println!("[press any key to continue]");
-    let mut wait = String::new();
-    io::stdin().read_line(&mut wait).expect("");
-}
-
-fn show_algorithm() {
-    print!("\x1B[2J\x1B[1;1H");
-    let combination = random_combination();
-
-    println!("Combination: {combination}\n");
-    
-    let mut remaining_combinations = all_combinations();
-    
-    let mut guess: String = String::from("☻☻♣♣");
-
-    let mut best_guesses = Vec::new();
-    let mut is_possible_guess = true;
-
-    loop {
-        println!("Guess:       {guess}");
-        write_is_possible_guess(is_possible_guess);
-        let (right, wrong) = determine_hits(&combination, &guess);
-        write_hits(right, wrong);
-        if right == 4 {
-            break;
-        }
-        
-        remaining_combinations.retain(|x| determine_hits(x, &guess) == (right, wrong));
-
-        let l = remaining_combinations.len();
-        println!("Remaining possibilities: {l}");
-        
-        best_guesses.clear();
-        (best_guesses, is_possible_guess) = next_best_guesses(&remaining_combinations);
-
-        guess.clear();
-        guess.push_str(&best_guesses[0]);
-    }
-    println!("Combination found!");
-    await_key();
 }
 
 fn display_chosen_symbol(chosen_symbol: usize) -> String {
@@ -172,195 +86,241 @@ fn display_chosen_symbol(chosen_symbol: usize) -> String {
     }).collect()
 }
 
+fn show_past_guesses(guesses: &Vec<(String, usize, usize)>) {
+    guesses.iter().enumerate()
+        .for_each(|(i, (g, r, w))| {
+            let j = i + 1;
+            println!("Guess {j}/6:");
+            println!("{g}");
+            write_hits(*r, *w);
+        });
+}
+
+fn write_is_possible_guess(was_victory_possible: bool) {
+    if was_victory_possible {
+        println!("There were optimal moves that could result in the final combination.");
+    } else {
+        println!("No optimal moves could have resulted in the final combination.");
+    }
+}
+
 fn read_option() -> String {
     let mut option = String::new();
     io::stdin().read_line(&mut option).expect("");
     option.trim().to_uppercase()
 }
 
-fn are_similar(user_guess: &str, guess: &str) -> bool {
-    let (right, wrong) = determine_hits(user_guess, guess);
-    right > 2 || wrong > 2 || right + wrong == 4
+fn await_key() {
+    println!("[press any key to continue]");
+    let mut wait = String::new();
+    io::stdin().read_line(&mut wait).expect("");
 }
 
-fn write_is_possible_guess(is_possible_guess: bool) {
-    if is_possible_guess {
-        println!("There were optimal moves that could've resulted in the final combination.");
-    } else {
-        println!("No optimal moves could've resulted in the final combination.");
-    }
-}
-
-fn play_game(with_helper: bool) {
+fn clear_screen() {
     print!("\x1B[2J\x1B[1;1H");
-    let combination = random_combination();
+}
 
-    println!("You have 6 attempts to guess the combination.\n");
-    let mut attempt: u8 = 0;
-    let mut guesses: Vec<(String, usize, usize)> = Vec::new();
-    let mut game_won = false;
-    let mut remaining_combinations = Vec::new();
-    if with_helper {
-        remaining_combinations = all_combinations();
-    }
-    let mut attempt_over = false;
-    let mut review_move = false;
-    let mut guess = String::new();
-    let mut processed_guesses: usize = 0;
-    let mut review_display: u8 = 4;
-    let mut best_guesses: Vec<String> = Vec::new();
-    let mut last_guess = String::new();
-    let mut is_possible_guess = true;
+fn show_algorithm() {
+    clear_screen();
+    let mut game_state = GameState::new(GameMode::Simulated);
 
-    'game_loop: loop {
-        attempt+=1;
-        guess.clear();
-        let mut chosen_symbol = 0;
-        loop {
-            print!("\x1B[2J\x1B[1;1H");
-            
-            guesses.iter().enumerate()
-                .for_each(|(i, (g, r, w))| {
-                    let j = i + 1;
-                    println!("Guess {j}/6:");
-                    println!("{g}");
-                    write_hits(*r, *w);
-                });
+    println!("Combination: {}\n", game_state.combination);
 
-            if attempt > 6 || game_won {
-                break 'game_loop;
-            }
-
-            if (!with_helper || !attempt_over) && !review_move {
-                println!("Guess {attempt}/6");
-                println!("{guess}");
-    
-                let display_symbols = display_chosen_symbol(chosen_symbol);
-                println!("{display_symbols}");
-                println!("Browse symbols using A and D. Select by pressing enter. Press X to undo.");
-                
-                let option = read_option();
-    
-                match option.as_str() {
-                    "A" => chosen_symbol = chosen_symbol.saturating_sub(1),
-                    "D" => chosen_symbol = (chosen_symbol + 1).min(5),
-                    "X" => {
-                        guess.pop();
-                    },
-                    "" => guess.push(SYMBOLS[chosen_symbol]),
-                    "Q" => return,
-                    _ => continue,
-                }
-            } else if attempt_over {
-                println!("If you wish to review your move, press R. Otherwise, press enter.");
-                
-                let option = read_option();
-    
-                match option.as_str() {
-                    "R" => review_move = true,
-                    "" =>  (),
-                    "Q" => return,
-                    _ => continue
-                }
-            } else {
-                if review_display == 4 {
-                    guesses.iter()
-                    .skip(processed_guesses)
-                    .take(guesses.len() - processed_guesses - 1)
-                    .for_each(|(g, r, w)|{
-                        remaining_combinations.retain(|x| determine_hits(x, g) == (*r, *w));
-                    });
-                    processed_guesses += guesses.len() - processed_guesses - 1;
-
-                    last_guess.clear();
-                    last_guess.push_str(&guesses.last().unwrap().0);
-
-                    best_guesses.clear();
-                    (best_guesses, is_possible_guess) = next_best_guesses(&remaining_combinations);
-
-                    review_display = 0;
-                }
-                
-                if review_display == 0 {
-                    if best_guesses.contains(&last_guess) {
-                        println!("Your move was optimal!")
-                    } else {
-                        println!("Your move was not optimal.");
-                    };
-                    write_is_possible_guess(is_possible_guess);
-                    
-                    println!("To view all optimal moves, press 1.");
-                    println!("To view optimal moves most similar to yours, press 2.");
-                    println!("To view all remaining combinations, press 3.");
-                    println!("To return to the game, press enter.");
-    
-                    let option = read_option();
-    
-                    match option.as_str() {
-                        "" => {
-                            review_move = false;
-                            review_display = 4;
-                        },
-                        "Q" => return,
-                        _ => {
-                            if let Ok(num @ 1..=3) = option.parse::<u8>() {
-                                review_display = num;
-                            } else {
-                                continue;
-                            }
-                        }
-                    }
-                } else {
-                    match review_display {
-                        1 => {
-                            println!("All optimal moves:");
-                            println!("{}", best_guesses.join(" "));
-                        },
-                        2 => {
-                            println!("Similar optimal moves:");
-                            println!("{}", best_guesses.iter().filter(|x| are_similar(&last_guess, x)).join(" "));
-                        },
-                        3 => {
-                            println!("There are {} remaining possible combinations:", remaining_combinations.len());
-                            println!("{}", remaining_combinations.join(" "));
-                        },
-                        _ => continue
-                    }
-                    review_display = 0;
-                    await_key();
-                }
-                
-            }
-
-            attempt_over = false;
-            if guess.chars().count() == 4 {
-                break;
-            }
-        }
-        let (right, wrong) = determine_hits(&combination, &guess);
+    loop {
+        println!("Guess {}:     {}", game_state.attempt, game_state.current_guess);
+        write_is_possible_guess(game_state.was_victory_possible);
+        let (right, wrong) = determine_hits(&game_state.combination, &game_state.current_guess);
         write_hits(right, wrong);
-        guesses.push((guess.clone(), right, wrong));
-        attempt_over = true;
-
+        
         if right == 4 {
-            game_won = true;
+            break;
+        }
+        
+        game_state.remaining_combinations.retain(|x| determine_hits(x, &game_state.current_guess) == (right, wrong));
+
+        println!("Remaining possibilities: {}", game_state.remaining_combinations.len());
+        
+        game_state.best_guesses.clear();
+        (game_state.best_guesses, game_state.was_victory_possible) = next_best_guesses(&game_state.remaining_combinations);
+
+        game_state.current_guess.clear();
+        game_state.current_guess.push_str(&game_state.best_guesses[0]);
+        game_state.attempt+= 1;
+    }
+    println!("Combination found in {} attempts!", game_state.attempt);
+    await_key();
+}
+
+fn keep_guessing(game_state: &mut GameState) -> bool {
+    println!("Guess {}/6:", game_state.attempt);
+    println!("{}", game_state.current_guess);
+
+    let display_symbols = display_chosen_symbol(game_state.chosen_symbol);
+    println!("{display_symbols}");
+    println!("Browse symbols using A and D. Select by pressing enter. Press X to undo.");
+    
+    let option = read_option();
+
+    match option.as_str() {
+        "A" => game_state.chosen_symbol = game_state.chosen_symbol.saturating_sub(1),
+        "D" => game_state.chosen_symbol = (game_state.chosen_symbol + 1).min(5),
+        "X" => {
+            game_state.current_guess.pop();
+        },
+        "" => game_state.current_guess.push(SYMBOLS[game_state.chosen_symbol]),
+        "Q" => return true,
+        _ => return false,
+    }
+
+    if game_state.current_guess.chars().count() == 4 {
+        game_state.save_current_guess();
+        if let GameMode::WithHelper = game_state.game_mode {
+            game_state.display = Display::OfferReview;
         }
     }
-    
-    if game_won {
-        attempt -= 1;
-        println!("Combination found in {attempt} attempts!");
+
+    return false;
+}
+
+fn offer_review(game_state: &mut GameState) -> bool {
+    println!("If you wish to review your move, press R. Otherwise, press enter.");
+                
+    let option = read_option();
+
+    match option.as_str() {
+        "R" => {
+            game_state.display = Display::ShowReviewOptions;
+
+            game_state.past_guesses.iter()
+            .skip(game_state.num_processed_guesses)
+            .take(game_state.past_guesses.len() - game_state.num_processed_guesses - 1)
+            .for_each(|(g, r, w)|{
+                game_state.remaining_combinations.retain(|x| determine_hits(x, g) == (*r, *w));
+            });
+
+            let (_, right, wrong) = game_state.past_guesses.last().unwrap();
+
+            game_state.best_guesses.clear();
+            (game_state.best_guesses, game_state.was_victory_possible) = next_best_guesses(&game_state.remaining_combinations);
+
+            game_state.remaining_combinations.retain(|x| determine_hits(x, &game_state.past_guesses.last().unwrap().0) == (*right, *wrong));
+            game_state.num_processed_guesses += game_state.past_guesses.len() - game_state.num_processed_guesses;
+        },
+        "" =>  {
+            game_state.display = Display::KeepGuessing;
+        },
+        "Q" => return true,
+        _ => return false
+    }
+    return false;
+}
+
+fn show_review_options(game_state: &mut GameState) -> bool {
+    if game_state.best_guesses.contains(&game_state.past_guesses.last().unwrap().0) {
+        println!("Your move was optimal!")
     } else {
-        println!("Out of attempts! The combination was {combination}.");
+        println!("Your move was not optimal.");
+    };
+    write_is_possible_guess(game_state.was_victory_possible);
+    
+    println!("To view all optimal moves, press 1.");
+    println!("To view optimal moves most similar to yours, press 2.");
+    println!("To view all remaining combinations, press 3.");
+    println!("To return to the game, press enter.");
+
+    let option = read_option();
+
+    match option.as_str() {
+        "" => {
+            game_state.display = Display::KeepGuessing;
+        },
+        "Q" => return true,
+        _ => {
+            if let Ok(num @ 1..=3) = option.parse::<u8>() {
+                game_state.display = Display::ShowReview(num);
+            } else {
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
+fn show_review(game_state: &mut GameState) -> bool {
+    use Display::*;
+    match game_state.display {
+        ShowReview(1) => {
+            println!("All optimal moves:");
+            println!("{}", game_state.best_guesses.join(" "));
+        },
+        ShowReview(2) => {
+            println!("Similar optimal moves:");
+            println!("{}", game_state.best_guesses.iter().filter(|x| are_similar(&game_state.past_guesses.last().unwrap().0, x)).join(" "));
+        },
+        ShowReview(3) => {
+            println!("There are {} remaining possible combinations:", game_state.remaining_combinations.len());
+            println!("{}", game_state.remaining_combinations.join(" "));
+        },
+        _ => return false
+    }
+
+    game_state.display = ShowReviewOptions;
+    await_key();
+
+    return false;
+}
+
+fn end_game(game_state: &GameState) {
+    if game_state.game_won {
+        println!("Combination found in {} attempts!", game_state.attempt - 1);
+    } else {
+        println!("Out of attempts! The combination was {}.", game_state.combination);
         println!("Better luck next time!");
     }
-    
+        
     await_key();
+}
+
+fn play_game(game_mode: GameMode) {
+    let mut game_state = GameState::new(game_mode);
+
+    loop {
+        clear_screen();
+        show_past_guesses(&game_state.past_guesses);
+        
+        if game_state.is_finished() {
+            break;
+        }
+
+        use Display::*;
+        match game_state.display {
+            KeepGuessing => {
+                if keep_guessing(&mut game_state) {
+                    return;
+                }
+            },
+            OfferReview => {
+                if offer_review(&mut game_state) {
+                    return;
+                }
+            },
+            ShowReviewOptions => {
+                if show_review_options(&mut game_state) {
+                    return;
+                }
+            }
+            ShowReview(_) => {
+                show_review(&mut game_state);
+            }
+        }
+    }
+
+    end_game(&game_state);
 }
 
 fn main() {
     loop {
-        print!("\x1B[2J\x1B[1;1H");
+        clear_screen();
         println!("Press the following keys to choose an option:");
         println!("1 - Play game");
         println!("2 - Play game with step-by-step aid");
@@ -370,13 +330,10 @@ fn main() {
         let option = read_option();
 
         match option.as_str() {
-            "1" => play_game(false),
-            "2" => play_game(true),
+            "1" => play_game(GameMode::Normal),
+            "2" => play_game(GameMode::WithHelper),
             "3" => show_algorithm(),
-            "Q" => {
-                print!("\x1B[2J\x1B[1;1H");
-                return;
-            },
+            "Q" => return,
             _ => continue,
         }
     }
